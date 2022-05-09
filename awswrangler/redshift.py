@@ -157,6 +157,7 @@ def _upsert(
     temp_table: str,
     schema: str,
     primary_keys: Optional[List[str]] = None,
+    column_names: Optional[List[str]] = None,
 ) -> None:
     if not primary_keys:
         primary_keys = _get_primary_keys(cursor=cursor, schema=schema, table=table)
@@ -168,7 +169,11 @@ def _upsert(
     sql: str = f'DELETE FROM "{schema}"."{table}" USING {temp_table} WHERE {join_clause}'
     _logger.debug(sql)
     cursor.execute(sql)
-    sql = f"INSERT INTO {schema}.{table} SELECT * FROM {temp_table}"
+    if column_names:
+        column_names_str = ",".join(column_names)
+        sql = f"INSERT INTO {schema}.{table} ({column_names_str}) SELECT {column_names_str} FROM {temp_table}"
+    else:
+        sql = f"INSERT INTO {schema}.{table} SELECT * FROM {temp_table}"
     _logger.debug(sql)
     cursor.execute(sql)
     _drop_table(cursor=cursor, schema=schema, table=temp_table)
@@ -813,11 +818,12 @@ def to_sql(
             )
             if index:
                 df.reset_index(level=df.index.names, inplace=True)
-            column_placeholders: str = ", ".join(["%s"] * len(df.columns))
+            column_names = df.columns
+            column_placeholders: str = ", ".join(["%s"] * len(column_names))
             schema_str = f'"{created_schema}".' if created_schema else ""
             insertion_columns = ""
             if use_column_names:
-                insertion_columns = f"({', '.join(df.columns)})"
+                insertion_columns = f"({', '.join(column_names)})"
             placeholder_parameter_pair_generator = _db_utils.generate_placeholder_parameter_pairs(
                 df=df, column_placeholders=column_placeholders, chunksize=chunksize
             )
@@ -828,7 +834,14 @@ def to_sql(
             if table != created_table:  # upsert
                 if lock:
                     _lock(cursor, [table], schema=schema)
-                _upsert(cursor=cursor, schema=schema, table=table, temp_table=created_table, primary_keys=primary_keys)
+                _upsert(
+                    cursor=cursor,
+                    schema=schema,
+                    table=table,
+                    temp_table=created_table,
+                    primary_keys=primary_keys,
+                    column_names=list(column_names),
+                )
             con.commit()
     except Exception as ex:
         con.rollback()
